@@ -250,11 +250,17 @@ def extract_response(output: Any) -> str:
 
     messages = output.get("messages", [])
 
-    if messages:
-        content = getattr(messages[-1], "content", None)
-        return content if isinstance(content, str) else str(content)
+    for message in reversed(messages):
+        if getattr(message, "type", "") == "ai":
+            content = getattr(message, "content", "")
 
-    return str(output)
+            if isinstance(content, str):
+                return content
+
+            if isinstance(content, list):
+                return json.dumps(content, ensure_ascii=False)
+
+    return json.dumps(output, default=str, ensure_ascii=False)
 
 
 def make_chain(agent):
