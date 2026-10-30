@@ -251,6 +251,33 @@ def extract_response(output: Any) -> str:
 
     messages = output.get("messages", [])
 
+    for message in reversed(messages):
+        if getattr(message, "type", "") != "ai":
+            continue
+
+        content = getattr(message, "content", "")
+
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            text_parts = []
+
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "text":
+                    text_parts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    text_parts.append(item)
+
+            result = "\n".join(text_parts).strip()
+
+            if result:
+                return result
+
+    return "No final AI response was generated."
+
+    messages = output.get("messages", [])
+
     # Find the latest AI message containing actual text
     for message in reversed(messages):
         if getattr(message, "type", "") != "ai":
