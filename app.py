@@ -1,7 +1,6 @@
 
 import os
 import json
-from typing import Any
 
 import uvicorn
 from fastapi import FastAPI
@@ -12,8 +11,77 @@ from langchain.agents import create_agent
 from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel, Field
 
-app=FastAPI()
-# ---------- 1. Agent 1: Destination Search Tool ----------
+
+# --------------------------------------------------
+# 1. DESTINATION DATA
+# --------------------------------------------------
+
+DESTINATIONS = {
+    "Hyderabad": {
+        "region": "South India",
+        "interests": ["history", "food", "culture"],
+        "attractions": [
+            "Charminar",
+            "Golconda Fort",
+            "Hussain Sagar Lake",
+            "Ramoji Film City"
+        ],
+        "daily_cost": 1800
+    },
+
+    "Jaipur": {
+        "region": "North India",
+        "interests": ["history", "culture", "architecture"],
+        "attractions": [
+            "Amber Fort",
+            "Hawa Mahal",
+            "City Palace",
+            "Jantar Mantar"
+        ],
+        "daily_cost": 2500
+    },
+
+    "Goa": {
+        "region": "West India",
+        "interests": ["beaches", "adventure", "nature"],
+        "attractions": [
+            "Baga Beach",
+            "Calangute Beach",
+            "Fort Aguada",
+            "Dudhsagar Falls"
+        ],
+        "daily_cost": 3000
+    },
+
+    "Mysuru": {
+        "region": "South India",
+        "interests": ["history", "culture", "nature"],
+        "attractions": [
+            "Mysore Palace",
+            "Chamundi Hills",
+            "Brindavan Gardens",
+            "St. Philomena's Church"
+        ],
+        "daily_cost": 1600
+    },
+
+    "Delhi": {
+        "region": "North India",
+        "interests": ["history", "food", "culture"],
+        "attractions": [
+            "India Gate",
+            "Red Fort",
+            "Qutub Minar",
+            "Lotus Temple"
+        ],
+        "daily_cost": 2200
+    }
+}
+
+
+# --------------------------------------------------
+# 2. DEFINE TOOLS
+# --------------------------------------------------
 
 @tool
 def search_destinations(
@@ -21,92 +89,59 @@ def search_destinations(
     interests: str,
     budget_inr: float
 ) -> str:
-    """Find destinations based on region, interests and budget."""
-
-    destinations = [
-        {
-            "name": "Hyderabad",
-            "attractions": ["Charminar", "Golconda Fort", "Hussain Sagar"],
-            "interests": "history culture food",
-            "daily_cost": 1800
-        },
-        {
-            "name": "Jaipur",
-            "attractions": ["Amber Fort", "Hawa Mahal", "City Palace"],
-            "interests": "history culture architecture photography",
-            "daily_cost": 2500
-        },
-        {
-            "name": "Goa",
-            "attractions": ["Calangute Beach", "Fort Aguada", "Fontainhas"],
-            "interests": "beach nature adventure food",
-            "daily_cost": 3000
-        },
-        {
-            "name": "Mysuru",
-            "attractions": ["Mysore Palace", "Chamundi Hill", "Brindavan Gardens"],
-            "interests": "history culture nature family",
-            "daily_cost": 2000
-        },
-        {
-            "name": "Delhi",
-            "attractions": ["Red Fort", "India Gate", "National Museum"],
-            "interests": "history culture museums food",
-            "daily_cost": 2300
-        }
-    ]
-
-    region = region.lower().strip()
-    interest_words = interests.lower().replace(",", " ").split()
+    """
+    Search Indian travel destinations based on region,
+    interests and total available budget in INR.
+    """
 
     results = []
 
-    for place in destinations:
+    requested_region = region.lower()
+
+    requested_interests = [
+        item.strip().lower()
+        for item in interests.split(",")
+    ]
+
+    for city, details in DESTINATIONS.items():
 
         region_match = (
-            region in ["india", "any", "anywhere"]
-            or region in place["name"].lower()
+            requested_region in ["any", "india", "all"]
+            or requested_region in details["region"].lower()
         )
 
-        interest_match = any(
-            word in place["interests"].split()
-            for word in interest_words
+        interest_match = (
+            "any" in requested_interests
+            or any(
+                interest in details["interests"]
+                for interest in requested_interests
+            )
         )
 
-        if region_match or interest_match:
+        # Daily estimate for one person
+        budget_match = details["daily_cost"] <= budget_inr
+
+        if region_match and interest_match and budget_match:
+
             results.append({
-                "destination": place["name"],
-                "attractions": place["attractions"],
-                "estimated_daily_cost_inr": place["daily_cost"],
-                "budget_status": (
-                    "May fit budget"
-                    if budget_inr >= place["daily_cost"]
-                    else "Budget may be tight"
-                )
+                "destination": city,
+                "region": details["region"],
+                "interests": details["interests"],
+                "attractions": details["attractions"],
+                "estimated_daily_cost_per_person_inr":
+                    details["daily_cost"]
             })
 
     if not results:
-        results = [
-            {
-                "destination": p["name"],
-                "attractions": p["attractions"],
-                "estimated_daily_cost_inr": p["daily_cost"],
-                "budget_status": (
-                    "May fit budget"
-                    if budget_inr >= p["daily_cost"]
-                    else "Budget may be tight"
-                )
-            }
-            for p in destinations
-        ]
+        return json.dumps({
+            "message": (
+                "No matching destinations found. "
+                "Try changing your region, interests or budget."
+            )
+        })
 
-    return json.dumps({
-        "note": "Demo suggestions, not live travel prices.",
-        "destinations": results
-    })
+    return json.dumps(results, indent=2)
 
-
-# ---------- 2. Agent 2: Itinerary Tool ----------
 
 @tool
 def build_itinerary(
@@ -116,75 +151,78 @@ def build_itinerary(
     travelers: int,
     interests: str
 ) -> str:
-    """Build a day-wise itinerary and calculate estimated costs."""
+    """
+    Create a day-by-day travel itinerary based on
+    destination, duration, budget, travelers and interests.
+    """
 
     if days < 1 or days > 30:
-        return "Trip duration must be between 1 and 30 days."
+        return "Please enter a trip duration between 1 and 30 days."
 
-    if travelers < 1 or budget_inr <= 0:
-        return "Provide valid travelers and budget."
+    if travelers < 1:
+        return "Number of travelers must be at least 1."
 
-    attractions = {
-        "hyderabad": ["Charminar", "Golconda Fort", "Hussain Sagar"],
-        "jaipur": ["Amber Fort", "Hawa Mahal", "City Palace"],
-        "goa": ["Calangute Beach", "Fort Aguada", "Fontainhas"],
-        "mysuru": ["Mysore Palace", "Chamundi Hill", "Brindavan Gardens"],
-        "delhi": ["Red Fort", "India Gate", "National Museum"]
-    }
+    city = destination.strip().title()
 
-    daily_costs = {
-        "hyderabad": 1800,
-        "jaipur": 2500,
-        "goa": 3000,
-        "mysuru": 2000,
-        "delhi": 2300
-    }
+    if city not in DESTINATIONS:
+        return (
+            "Destination not found in the available database. "
+            "Choose Hyderabad, Jaipur, Goa, Mysuru or Delhi."
+        )
 
-    key = destination.lower()
+    details = DESTINATIONS[city]
 
-    places = next(
-        (v for k, v in attractions.items() if k in key),
-        ["Explore the city", "Visit a local attraction", "Try local food"]
-    )
+    attractions = details["attractions"]
 
-    daily_cost = next(
-        (v for k, v in daily_costs.items() if k in key),
-        2200
-    )
+    daily_cost = details["daily_cost"]
+
+    estimated_cost = daily_cost * days * travelers
 
     itinerary = []
 
     for day in range(days):
+
+        first = attractions[(day * 2) % len(attractions)]
+
+        second = attractions[
+            (day * 2 + 1) % len(attractions)
+        ]
+
         itinerary.append({
             "day": day + 1,
-            "activities": [
-                places[(day * 2) % len(places)],
-                places[(day * 2 + 1) % len(places)]
-            ]
+            "morning": f"Visit {first}",
+            "afternoon": f"Explore {second}",
+            "evening": "Enjoy local food and explore the city"
         })
 
-    estimated_cost = daily_cost * days * travelers
-
-    return json.dumps({
-        "destination": destination,
-        "days": days,
-        "travelers": travelers,
-        "budget_inr": budget_inr,
-        "estimated_local_cost_inr": estimated_cost,
+    result = {
+        "destination": city,
+        "duration_days": days,
+        "number_of_travelers": travelers,
+        "interests": interests,
+        "estimated_daily_cost_per_person_inr": daily_cost,
+        "estimated_total_cost_inr": estimated_cost,
+        "user_budget_inr": budget_inr,
         "budget_status": (
-            "Within estimated budget"
+            "Within budget"
             if estimated_cost <= budget_inr
             else "Over budget"
         ),
-        "itinerary": itinerary,
-        "note": (
-            "Demo estimate only. Travel, accommodation and live prices "
-            "may not be included."
-        )
-    })
+        "itinerary": itinerary
+    }
+
+    return json.dumps(result, indent=2)
 
 
-# ---------- 3. Gemini Configuration ----------
+tools = [
+    search_destinations,
+    build_itinerary
+]
+
+
+# --------------------------------------------------
+# 3. INITIALIZE GEMMA MODEL
+# --------------------------------------------------
 
 GOOGLE_API_KEY = (
     os.environ.get("GOOGLE_API_KEY")
@@ -196,139 +234,171 @@ if not GOOGLE_API_KEY:
         "Please configure GOOGLE_API_KEY in Render Environment."
     )
 
-GOOGLE_MODEL = "gemini-3.8-flash"
+GOOGLE_MODEL = "gemma-4-31b-it"
 
 llm = ChatGoogleGenerativeAI(
     model=GOOGLE_MODEL,
     google_api_key=GOOGLE_API_KEY,
-    temperature=0,
-    max_retries=2
+    temperature=0
 )
 
-print("CURRENT GEMINI MODEL:", GOOGLE_MODEL)
+print("CURRENT MODEL:", GOOGLE_MODEL)
 
 
-# ---------- 4. Create Two AI Agents ----------
+# --------------------------------------------------
+# 4. CREATE TWO AGENTS
+# --------------------------------------------------
+
+# Agent 1: Destination Search Agent
 
 destination_agent = create_agent(
     model=llm,
     tools=[search_destinations],
     system_prompt=(
-        "You are Agent 1, the Destination Discovery Agent. "
-        "Find destinations based on region, interests and budget. "
-        "Always use the search_destinations tool. "
-        "Explain why destinations suit the traveler. "
-        "Never invent live prices."
+        "You are a Destination Search Agent for Indian travel. "
+        "Find suitable destinations using the search_destinations tool. "
+        "Consider the user's region, interests and budget. "
+        "Present the recommended destinations clearly."
     )
 )
+
+
+# Agent 2: Itinerary Planning Agent
 
 itinerary_agent = create_agent(
     model=llm,
     tools=[build_itinerary],
     system_prompt=(
-        "You are Agent 2, the Itinerary and Budget Agent. "
-        "Create a day-wise travel itinerary. "
-        "Use the build_itinerary tool when all required details "
-        "are available. Required details are destination, days, "
-        "budget and travelers. Ask for missing information. "
-        "Clearly explain estimated costs. Never claim live prices."
+        "You are a Travel Itinerary Planning Agent. "
+        "Create a day-by-day travel plan using the build_itinerary tool. "
+        "Consider the destination, number of days, budget, travelers "
+        "and interests. Clearly explain the estimated cost and budget status. "
+        "Do not invent missing travel details. Ask the user if important "
+        "information is missing."
     )
 )
 
 
-# ---------- 5. Input Schema ----------
+# --------------------------------------------------
+# 5. INPUT AND OUTPUT FORMATTING
+# --------------------------------------------------
 
 class AgentInput(BaseModel):
+
     input: str = Field(
-        description=(
-            "Enter destination or region, days, budget in INR, "
-            "number of travelers and interests."
-        )
+        description="Enter your travel requirements"
     )
 
 
-def format_for_agent(x: Any) -> dict:
-    user_input = x["input"] if isinstance(x, dict) else x.input
-    return {"messages": [("user", user_input)]}
+def format_for_agent(x) -> dict:
+
+    user_input = (
+        x["input"]
+        if isinstance(x, dict)
+        else x.input
+    )
+
+    return {
+        "messages": [
+            ("user", user_input)
+        ]
+    }
 
 
-# ---------- 6. Extract AI Response ----------
+def extract_text_response(agent_output) -> str:
 
-def extract_response(output: Any) -> str:
+    if not isinstance(agent_output, dict):
+        return str(agent_output)
 
-    if not isinstance(output, dict):
-        return str(output)
+    messages = agent_output.get("messages")
 
-    messages = output.get("messages", [])
+    if messages is None:
 
-    for message in reversed(messages):
+        for value in agent_output.values():
 
-        if getattr(message, "type", "") != "ai":
-            continue
+            if isinstance(value, dict) and "messages" in value:
+                messages = value["messages"]
+                break
 
-        content = getattr(message, "content", "")
+    if messages:
 
-        if isinstance(content, str) and content.strip():
-            return content
+        last_message = messages[-1]
+
+        content = getattr(
+            last_message,
+            "content",
+            last_message
+        )
 
         if isinstance(content, list):
 
-            text_parts = []
+            return "\n".join(
+                str(item.get("text", item))
+                if isinstance(item, dict)
+                else str(item)
+                for item in content
+            )
 
-            for item in content:
+        return str(content)
 
-                if isinstance(item, dict):
-                    if item.get("type") == "text":
-                        text_parts.append(item.get("text", ""))
-
-                elif isinstance(item, str):
-                    text_parts.append(item)
-
-            result = "\n".join(text_parts).strip()
-
-            if result:
-                return result
-
-    return "No final AI response was generated. Check Render logs."
+    return str(agent_output)
 
 
-# ---------- 7. Create Agent Chains ----------
+# --------------------------------------------------
+# 6. CREATE AGENT CHAINS
+# --------------------------------------------------
 
-def make_chain(agent):
+destination_chain = (
+    RunnableLambda(format_for_agent)
+    | destination_agent
+    | RunnableLambda(extract_text_response)
+).with_types(
+    input_type=AgentInput,
+    output_type=str
+)
 
-    return (
-        RunnableLambda(format_for_agent)
-        | agent
-        | RunnableLambda(extract_response)
-    ).with_types(
-        input_type=AgentInput,
-        output_type=str
+
+itinerary_chain = (
+    RunnableLambda(format_for_agent)
+    | itinerary_agent
+    | RunnableLambda(extract_text_response)
+).with_types(
+    input_type=AgentInput,
+    output_type=str
+)
+
+
+# --------------------------------------------------
+# 7. COMBINED TRAVEL AGENT
+# --------------------------------------------------
+
+def create_complete_travel_plan(x):
+
+    user_input = (
+        x["input"]
+        if isinstance(x, dict)
+        else x.input
     )
 
-
-destination_chain = make_chain(destination_agent)
-
-itinerary_chain = make_chain(itinerary_agent)
-
-
-# ---------- 8. Run Both Agents ----------
-
-def run_both_agents(x: Any) -> str:
-
-    user_input = x["input"] if isinstance(x, dict) else x.input
+    # First agent searches for destinations
 
     destination_result = destination_chain.invoke({
         "input": user_input
     })
 
+    # Second agent creates the itinerary
+
     itinerary_input = (
-        "Create a travel itinerary and check the budget.\n\n"
-        "User travel request:\n"
-        f"{user_input}\n\n"
-        "Destination recommendations from Agent 1:\n"
-        f"{destination_result}\n\n"
-        "Use the user's travel details. "
-        "Ask for missing essential information instead of guessing."
+        "Original travel requirements:\n"
+        + user_input
+        + "\n\nDestination recommendations from Agent 1:\n"
+        + destination_result
+        + "\n\nUsing the recommendations above, create a suitable "
+        "travel itinerary using the build_itinerary tool. "
+        "Use only a destination returned by Agent 1. "
+        "If the user has not provided the number of days, "
+        "budget or travelers, ask for the missing information "
+        "instead of inventing it."
     )
 
     itinerary_result = itinerary_chain.invoke({
@@ -336,37 +406,37 @@ def run_both_agents(x: Any) -> str:
     })
 
     return (
-        "=== AGENT 1: DESTINATION DISCOVERY ===\n\n"
+        "DESTINATION RECOMMENDATIONS:\n\n"
         + destination_result
-        + "\n\n"
-        "=== AGENT 2: ITINERARY AND BUDGET CHECK ===\n\n"
+        + "\n\nTRAVEL ITINERARY:\n\n"
         + itinerary_result
     )
 
 
 combined_chain = (
-    RunnableLambda(format_for_agent)
-    | RunnableLambda(
-        lambda state: {"input": state["messages"][0][1]}
-    )
-    | RunnableLambda(run_both_agents)
+    RunnableLambda(create_complete_travel_plan)
 ).with_types(
     input_type=AgentInput,
     output_type=str
 )
 
 
-# ---------- 9. FastAPI Application ----------
+# --------------------------------------------------
+# 8. FASTAPI APPLICATION
+# --------------------------------------------------
 
 app = FastAPI(
     title="Smart Travel Planning Agent API",
     description=(
-        "Two AI agents for destination discovery, "
-        "itinerary creation and budget checking."
+        "AI travel planning application using Gemma 4 "
+        "and two agents: Destination Search Agent "
+        "and Itinerary Planning Agent."
     ),
     version="1.0.0"
 )
 
+
+# Destination Agent Route
 
 add_routes(
     app,
@@ -375,12 +445,18 @@ add_routes(
     playground_type="default"
 )
 
+
+# Itinerary Agent Route
+
 add_routes(
     app,
     itinerary_chain,
     path="/itinerary-agent",
     playground_type="default"
 )
+
+
+# Combined Agent Route
 
 add_routes(
     app,
@@ -390,19 +466,26 @@ add_routes(
 )
 
 
+# --------------------------------------------------
+# 9. HOME PAGE
+# --------------------------------------------------
+
 @app.get("/")
 def home():
 
     return {
-        "message": "Smart Travel Planning Agent API is running",
+        "message": "Welcome to Smart Travel Planning Agent!",
+        "model": GOOGLE_MODEL,
         "destination_agent": "/destination-agent/playground/",
         "itinerary_agent": "/itinerary-agent/playground/",
         "combined_agent": "/agent/playground/",
-        "docs": "/docs"
+        "api_docs": "/docs"
     }
 
 
-# ---------- 10. Start Server ----------
+# --------------------------------------------------
+# 10. RUN APPLICATION
+# --------------------------------------------------
 
 if __name__ == "__main__":
 
