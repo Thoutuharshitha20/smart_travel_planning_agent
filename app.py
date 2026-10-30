@@ -13,7 +13,7 @@ from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel, Field
 
 
-# ---------- 1. Agent tools ----------
+# ---------- 1. Agent 1: Destination Search Tool ----------
 
 @tool
 def search_destinations(
@@ -21,7 +21,7 @@ def search_destinations(
     interests: str,
     budget_inr: float
 ) -> str:
-    """Find destination ideas and attractions based on interests and budget."""
+    """Find destinations based on region, interests and budget."""
 
     destinations = [
         {
@@ -57,22 +57,23 @@ def search_destinations(
     ]
 
     region = region.lower().strip()
-    interests = interests.lower()
+    interest_words = interests.lower().replace(",", " ").split()
 
     results = []
 
     for place in destinations:
+
         region_match = (
             region in ["india", "any", "anywhere"]
             or region in place["name"].lower()
         )
 
         interest_match = any(
-            interest in place["interests"]
-            for interest in interests.split(",")
+            word in place["interests"].split()
+            for word in interest_words
         )
 
-        if region_match and interest_match:
+        if region_match or interest_match:
             results.append({
                 "destination": place["name"],
                 "attractions": place["attractions"],
@@ -100,10 +101,12 @@ def search_destinations(
         ]
 
     return json.dumps({
-        "note": "Demo suggestions; not live travel prices.",
+        "note": "Demo suggestions, not live travel prices.",
         "destinations": results
     })
 
+
+# ---------- 2. Agent 2: Itinerary Tool ----------
 
 @tool
 def build_itinerary(
@@ -113,13 +116,13 @@ def build_itinerary(
     travelers: int,
     interests: str
 ) -> str:
-    """Create a day-by-day travel plan and compare estimated local costs with budget."""
+    """Build a day-wise itinerary and calculate estimated costs."""
 
     if days < 1 or days > 30:
         return "Trip duration must be between 1 and 30 days."
 
     if travelers < 1 or budget_inr <= 0:
-        return "Provide a valid number of travelers and a positive budget."
+        return "Provide valid travelers and budget."
 
     attractions = {
         "hyderabad": ["Charminar", "Golconda Fort", "Hussain Sagar"],
@@ -171,17 +174,17 @@ def build_itinerary(
         "budget_status": (
             "Within estimated budget"
             if estimated_cost <= budget_inr
-            else "Over budget; consider reducing costs or trip duration"
+            else "Over budget"
         ),
         "itinerary": itinerary,
         "note": (
-            "Demo estimate only. Travel to the destination, accommodation, "
-            "and live prices may not be included."
+            "Demo estimate only. Travel, accommodation and live prices "
+            "may not be included."
         )
     })
 
 
-# ---------- 2. Initialize Gemini ----------
+# ---------- 3. Gemini Configuration ----------
 
 GOOGLE_API_KEY = (
     os.environ.get("GOOGLE_API_KEY")
@@ -190,29 +193,32 @@ GOOGLE_API_KEY = (
 
 if not GOOGLE_API_KEY:
     raise RuntimeError(
-        "Please configure the GOOGLE_API_KEY environment variable."
+        "Please configure GOOGLE_API_KEY in Render Environment."
     )
 
+GOOGLE_MODEL = "gemini-3.8-flash"
 
 llm = ChatGoogleGenerativeAI(
-    model=os.environ.get("GOOGLE_MODEL", "gemini-3.8-flash"),
+    model=GOOGLE_MODEL,
     google_api_key=GOOGLE_API_KEY,
     temperature=0,
+    max_retries=2
 )
 
-print("CURRENT GEMINI MODEL:", os.environ.get("GOOGLE_MODEL"))
+print("CURRENT GEMINI MODEL:", GOOGLE_MODEL)
 
-# ---------- 3. Create two agents ----------
+
+# ---------- 4. Create Two AI Agents ----------
 
 destination_agent = create_agent(
     model=llm,
     tools=[search_destinations],
     system_prompt=(
         "You are Agent 1, the Destination Discovery Agent. "
-        "Recommend destinations and attractions based on region, interests, "
-        "and budget. Use the search_destinations tool. Explain why each "
-        "destination suits the traveler. Clearly identify demo estimates "
-        "and never invent live prices or availability."
+        "Find destinations based on region, interests and budget. "
+        "Always use the search_destinations tool. "
+        "Explain why destinations suit the traveler. "
+        "Never invent live prices."
     )
 )
 
@@ -221,22 +227,22 @@ itinerary_agent = create_agent(
     tools=[build_itinerary],
     system_prompt=(
         "You are Agent 2, the Itinerary and Budget Agent. "
-        "Create a day-by-day itinerary and check the estimated local cost "
-        "against the user's budget. Use the build_itinerary tool when the "
-        "destination, days, budget, and number of travelers are provided. "
-        "Ask for missing essential information instead of guessing. "
-        "Do not claim to check live schedules or prices."
+        "Create a day-wise travel itinerary. "
+        "Use the build_itinerary tool when all required details "
+        "are available. Required details are destination, days, "
+        "budget and travelers. Ask for missing information. "
+        "Clearly explain estimated costs. Never claim live prices."
     )
 )
 
 
-# ---------- 4. LangServe input formatting ----------
+# ---------- 5. Input Schema ----------
 
 class AgentInput(BaseModel):
     input: str = Field(
         description=(
-            "Travel request including region or destination, number of days, "
-            "budget in INR, travelers, and interests."
+            "Enter destination or region, days, budget in INR, "
+            "number of travelers and interests."
         )
     )
 
@@ -246,14 +252,17 @@ def format_for_agent(x: Any) -> dict:
     return {"messages": [("user", user_input)]}
 
 
+# ---------- 6. Extract AI Response ----------
 
 def extract_response(output: Any) -> str:
+
     if not isinstance(output, dict):
         return str(output)
 
     messages = output.get("messages", [])
 
     for message in reversed(messages):
+
         if getattr(message, "type", "") != "ai":
             continue
 
@@ -263,40 +272,15 @@ def extract_response(output: Any) -> str:
             return content
 
         if isinstance(content, list):
+
             text_parts = []
 
             for item in content:
-                if isinstance(item, dict) and item.get("type") == "text":
-                    text_parts.append(item.get("text", ""))
-                elif isinstance(item, str):
-                    text_parts.append(item)
 
-            result = "\n".join(text_parts).strip()
-
-            if result:
-                return result
-
-    return "No final AI response was generated."
-
-    messages = output.get("messages", [])
-
-    # Find the latest AI message containing actual text
-    for message in reversed(messages):
-        if getattr(message, "type", "") != "ai":
-            continue
-
-        content = getattr(message, "content", "")
-
-        if isinstance(content, str) and content.strip():
-            return content
-
-        if isinstance(content, list):
-            text_parts = []
-
-            for item in content:
                 if isinstance(item, dict):
                     if item.get("type") == "text":
                         text_parts.append(item.get("text", ""))
+
                 elif isinstance(item, str):
                     text_parts.append(item)
 
@@ -305,57 +289,57 @@ def extract_response(output: Any) -> str:
             if result:
                 return result
 
-    return "No final AI response was generated. Please check the server logs."
+    return "No final AI response was generated. Check Render logs."
 
 
-    messages = output.get("messages", [])
-
-    for message in reversed(messages):
-        if getattr(message, "type", "") == "ai":
-            content = getattr(message, "content", "")
-
-            if isinstance(content, str):
-                return content
-
-            if isinstance(content, list):
-                return json.dumps(content, ensure_ascii=False)
-
-    return json.dumps(output, default=str, ensure_ascii=False)
-
+# ---------- 7. Create Agent Chains ----------
 
 def make_chain(agent):
+
     return (
         RunnableLambda(format_for_agent)
         | agent
         | RunnableLambda(extract_response)
-    ).with_types(input_type=AgentInput, output_type=str)
+    ).with_types(
+        input_type=AgentInput,
+        output_type=str
+    )
 
 
 destination_chain = make_chain(destination_agent)
+
 itinerary_chain = make_chain(itinerary_agent)
 
 
+# ---------- 8. Run Both Agents ----------
+
 def run_both_agents(x: Any) -> str:
+
     user_input = x["input"] if isinstance(x, dict) else x.input
 
     destination_result = destination_chain.invoke({
         "input": user_input
     })
 
+    itinerary_input = (
+        "Create a travel itinerary and check the budget.\n\n"
+        "User travel request:\n"
+        f"{user_input}\n\n"
+        "Destination recommendations from Agent 1:\n"
+        f"{destination_result}\n\n"
+        "Use the user's travel details. "
+        "Ask for missing essential information instead of guessing."
+    )
+
     itinerary_result = itinerary_chain.invoke({
-        "input": (
-            "Create an itinerary and check the budget using the following "
-            "travel request. Use the destination recommendations as context. "
-            "Ask for missing essential information instead of guessing.\n\n"
-            f"Travel request:\n{user_input}\n\n"
-            f"Destination recommendations:\n{destination_result}"
-        )
+        "input": itinerary_input
     })
 
     return (
-        "=== AGENT 1: DESTINATION DISCOVERY ===\n"
+        "=== AGENT 1: DESTINATION DISCOVERY ===\n\n"
         + destination_result
-        + "\n\n=== AGENT 2: ITINERARY AND BUDGET CHECK ===\n"
+        + "\n\n"
+        "=== AGENT 2: ITINERARY AND BUDGET CHECK ===\n\n"
         + itinerary_result
     )
 
@@ -366,19 +350,23 @@ combined_chain = (
         lambda state: {"input": state["messages"][0][1]}
     )
     | RunnableLambda(run_both_agents)
-).with_types(input_type=AgentInput, output_type=str)
+).with_types(
+    input_type=AgentInput,
+    output_type=str
+)
 
 
-# ---------- 5. FastAPI application ----------
+# ---------- 9. FastAPI Application ----------
 
 app = FastAPI(
     title="Smart Travel Planning Agent API",
     description=(
-        "Two AI agents for destination discovery, itinerary creation, "
-        "and budget checking."
+        "Two AI agents for destination discovery, "
+        "itinerary creation and budget checking."
     ),
     version="1.0.0"
 )
+
 
 add_routes(
     app,
@@ -404,6 +392,7 @@ add_routes(
 
 @app.get("/")
 def home():
+
     return {
         "message": "Smart Travel Planning Agent API is running",
         "destination_agent": "/destination-agent/playground/",
@@ -413,6 +402,14 @@ def home():
     }
 
 
+# ---------- 10. Start Server ----------
+
 if __name__ == "__main__":
+
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port
+    )
