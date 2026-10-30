@@ -72,7 +72,7 @@ def search_destinations(
             for interest in interests.split(",")
         )
 
-        if region_match or interest_match:
+        if region_match and interest_match:
             results.append({
                 "destination": place["name"],
                 "attractions": place["attractions"],
