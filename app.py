@@ -244,9 +244,40 @@ def format_for_agent(x: Any) -> dict:
     return {"messages": [("user", user_input)]}
 
 
+
 def extract_response(output: Any) -> str:
     if not isinstance(output, dict):
         return str(output)
+
+    messages = output.get("messages", [])
+
+    # Find the latest AI message containing actual text
+    for message in reversed(messages):
+        if getattr(message, "type", "") != "ai":
+            continue
+
+        content = getattr(message, "content", "")
+
+        if isinstance(content, str) and content.strip():
+            return content
+
+        if isinstance(content, list):
+            text_parts = []
+
+            for item in content:
+                if isinstance(item, dict):
+                    if item.get("type") == "text":
+                        text_parts.append(item.get("text", ""))
+                elif isinstance(item, str):
+                    text_parts.append(item)
+
+            result = "\n".join(text_parts).strip()
+
+            if result:
+                return result
+
+    return "No final AI response was generated. Please check the server logs."
+
 
     messages = output.get("messages", [])
 
