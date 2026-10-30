@@ -193,11 +193,14 @@ if not GOOGLE_API_KEY:
         "Please configure the GOOGLE_API_KEY environment variable."
     )
 
+
 llm = ChatGoogleGenerativeAI(
-    model=os.environ.get("GOOGLE_MODEL", "gemini-2.5-flash"),
+    model=os.environ.get("GOOGLE_MODEL", "gemini-3.8-flash"),
     google_api_key=GOOGLE_API_KEY,
-    temperature=0
+    temperature=0,
+    max_retries=2
 )
+
 
 
 # ---------- 3. Create two agents ----------
