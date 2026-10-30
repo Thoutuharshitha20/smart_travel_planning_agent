@@ -12,7 +12,7 @@ from langchain.agents import create_agent
 from langchain_core.runnables import RunnableLambda
 from pydantic import BaseModel, Field
 
-
+app=FastAPI()
 # ---------- 1. Agent 1: Destination Search Tool ----------
 
 @tool
