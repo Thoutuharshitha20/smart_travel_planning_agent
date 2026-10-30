@@ -198,10 +198,9 @@ llm = ChatGoogleGenerativeAI(
     model=os.environ.get("GOOGLE_MODEL", "gemini-3.8-flash"),
     google_api_key=GOOGLE_API_KEY,
     temperature=0,
-    max_retries=2
 )
 
-
+print("CURRENT GEMINI MODEL:", os.environ.get("GOOGLE_MODEL"))
 
 # ---------- 3. Create two agents ----------
 
